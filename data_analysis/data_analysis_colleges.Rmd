@@ -1,0 +1,224 @@
+---
+title: "college opioid usage and overdose deaths"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+```{r}
+install.packages("tidyverse")
+install.packages("janitor")
+install.packages("arcos")
+install.packages("scales")
+install.packages("ggrepel")
+install.packages("tidycensus")
+
+library(tidyverse)
+library(janitor)
+library(arcos)
+library(scales)
+library(ggrepel)
+library(tidycensus)
+
+
+```
+
+```{r}
+library(tidyverse)
+library(janitor)
+library(arcos)
+library(scales)
+library(ggrepel)
+library(tidycensus)
+```
+
+```{r}
+# store one of our API keys as an object called key
+key <- "uO4EK6I"
+```
+
+```{r}
+# Load in and store county population's per year from the ARCOS Database.
+
+arcos_county_population_per_year <- county_population(key = key) %>%
+  clean_names()
+
+# Load in total_pharmacies_county(), summarized_county_annual(), summarized_county_monthly(),  and county_population()
+
+arcos_pharmacies_county <- total_pharmacies_county(key = key) %>%
+  clean_names()
+
+#rcos_summarized_county_annual <- summarized_county_annual(key = key) %>%
+  clean_names()
+
+arcos_summarized_county_monthly <- summarized_county_monthly(key = key) %>%
+  clean_names()
+
+county_totals <- combined_buyer_annual(key = key) %>%
+  clean_names()
+
+
+
+```
+
+
+
+
+```{r}
+# Load in the CSV data for opioid overdoses from the CDC deaths database, and a list of public colleges from the National Center for Education Statistics. 
+
+opioid_overdoses <- read_tsv("Data_Analysis/data/cdc_opioid_data.csv")
+state_colleges <- read_csv("Data_Analysis/data/list_public_colleges.csv")
+
+view(opioid_overdoses)
+view(state_colleges)
+```
+
+```{r}
+#install.packages("zipcode")
+#library("zipcode")
+install.packages('stringr')
+library(stringr)
+
+# Use zipcode to isolate and mutate the zip code in the state colleges data
+
+zips <- state_colleges$Address
+
+zips <- clean.zipcodes(zips)
+
+print(zips)
+
+state_colleges_x <- state_colleges %>%
+  mutate(zips = str_extract(Address, "(?<!\\d)(\\d{5}(?:[-\\s]\\d{4})?)\\b")) %>%
+  mutate(zips = clean.zipcodes(zips))
+
+
+```
+
+```{r}
+a <- read_csv("Data_Analysis/data/colleges/CollegeNavigator_Search_2019-11-07_13.30.10.csv")
+b <- read_csv("Data_Analysis/data/colleges/CollegeNavigator_Search_2019-11-07_13.30.46.csv")
+c <- read_csv("Data_Analysis/data/colleges/CollegeNavigator_Search_2019-11-07_13.31.00.csv")
+d <- read_csv("Data_Analysis/data/colleges/CollegeNavigator_Search_2019-11-07_13.31.17.csv")
+e <- read_csv("Data_Analysis/data/colleges/CollegeNavigator_Search_2019-11-07_13.31.49.csv")
+f <- read_csv("Data_Analysis/data/colleges/CollegeNavigator_Search_2019-11-07_13.32.06.csv")
+g <- read_csv("Data_Analysis/data/colleges/CollegeNavigator_Search_2019-11-07_13.32.22.csv")
+
+# merge the files
+
+colleges <- bind_rows(a, b, c,d,e,f,g) %>%
+  filter(!is.na(Name))
+
+# Strip out the zip
+
+colleges_x <- colleges %>% 
+  separate(Address, into=c ("street", "city","state", "overflow", "overflow2", "overflow3"), sep=",")
+
+# Strip
+colleges_x <- colleges_x %>%
+  mutate(zips = str_extract(state, "(?<!\\d)(\\d{5}(?:[-\\s]\\d{4})?)\\b")) %>%
+  mutate(zips = clean.zipcodes(zips)) %>%
+  mutate(state = str_remove(state, "(?<!\\d)(\\d{5}(?:[-\\s]\\d{4})?)\\b")) %>%
+  mutate(state = str_trim(state, side = c("both")), 
+         city = str_trim(city, side =c("both")),
+         street = str_trim(street, side =c("both"))) %>%
+  filter(is.na(overflow),
+        !is.na(zips)) %>%
+  mutate(unique_id = row_number())
+  
+# Subset of the data with just street city and state
+
+colleges_subset <- colleges_x %>%
+  select(unique_id, street, city, state)
+
+# GeoID
+# install.packages("censusr")
+# library("censusr")
+
+
+colleges_subset <- colleges_x %>%
+  select(unique_id, street, city,state) %>%
+  select(-unique_id)
+
+colleges_subset <- append_geoid(colleges_subset, geoid_type=c('co'))
+
+# Read in a list of Rural-Urban Continuum Codes (2013) from the United States Department of Agriculture, so to understand spread of rural and urban counties.
+
+rural_urban_codes_2013 <- read.csv("Data_Analysis/data/ruralurbancodes2013 - Rural-urban Continuum Code 2013.csv")
+
+#Standardise the column name to countyfips
+
+colleges_subset <- colleges_subset %>% rename(countyfips=County_Code)
+opioid_overdoses <- opioid_overdoses %>% rename(countyfips= County_Code)
+rural_urban_codes_2013 <- rural_urban_codes_2013 %>% rename(countyfips=County_Code)
+
+# Join the databases rural_urban_codes_2013, colleges_subset, opioid_overdoses
+
+colleges_opioid_deaths <- colleges_subset %>%
+  inner_join(opioid_overdoses, by =c("countyfips"))
+
+colleges_opioid_deaths_pill shipments <- colleges_opioid_deaths %>%
+  inner_join(arcos_summarized_county_annual)
+
+
+
+
+
+
+airports <- dplyr::data_frame(
+  street = "700 Catalina Dr", city = "Daytona Beach", state = "FL"
+)
+
+append_geoid(airports, geoid_type=c('co'))
+
+
+
+
+```
+
+```{r}
+
+# Create and answer 15 questions
+
+# What college county had the greatest number of opioid deaths from 2006-2012?
+
+# Did rural college counties have a greater number of opioid deaths from 2006-2012 than rural counties without colleges?
+
+# Did rural college counties have a higher pill per person rate from 2006-2012 than rural counties without colleges? 
+
+# Which college county had the least number of opioid deaths from 2006-2012
+
+# Which college county received the highest number of opioid pills from 2006-2012?
+
+# Which college county received the lowest number of opioid pills from 2006-2012?
+
+# Did rural or urban college counties have a higher opioid death rate from 2006-2012?
+
+# What college county had the highest pill per person rate from 2006-2012?
+
+# What rural college county had the highest pill per person rate from 2006-2012?
+
+```
+
